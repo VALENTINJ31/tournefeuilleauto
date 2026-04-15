@@ -187,6 +187,26 @@ app.post('/api/person/remove', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Export données brutes (backup) ──
+app.get('/api/export', async (req, res) => {
+  try {
+    const data = await readData();
+    res.setHeader('Content-Disposition', 'attachment; filename="planning_backup.json"');
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify(data, null, 2));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Import données (restauration) ──
+app.post('/api/import', async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data.people || !data.defaultShifts) return res.status(400).json({ error: 'Fichier invalide' });
+    await writeData(data);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Santé ──
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, storage: USE_PG ? 'postgresql' : 'file', ts: new Date().toISOString() });

@@ -167,9 +167,10 @@ footer{text-align:center;padding:2rem;color:#333;font-size:.78rem;letter-spacing
 <header>
   <div class="logo">Renault <span>Tournefeuille</span></div>
   <nav>
+    <span id="storage-badge" style="font-size:.72rem;font-weight:600;padding:.2rem .6rem;border-radius:3px;background:#222;color:#666;letter-spacing:.05em">…</span>
     <button class="hbtn" onclick="togglePanel('team-panel')">👥 Équipe</button>
     <button class="hbtn" onclick="togglePanel('edit-panel');if(document.getElementById('edit-panel').classList.contains('open'))buildEditForm()">✏️ Modifier</button>
-    <button class="hbtn" onclick="saveData()">💾 Enregistrer</button>
+    <button class="hbtn" id="save-btn" onclick="saveData()">💾 Enregistrer</button>
   </nav>
 </header>
 
@@ -366,6 +367,33 @@ footer{text-align:center;padding:2rem;color:#333;font-size:.78rem;letter-spacing
   <div class="edit-actions">
     <button class="btn-primary" onclick="saveSettings()">✓ Enregistrer les réglages</button>
     <button class="btn-secondary" onclick="resetSettings()">Réinitialiser</button>
+  </div>
+
+  <!-- SAUVEGARDE / RESTAURATION -->
+  <div class="settings-section" style="margin-top:2rem">
+    <h4>Sauvegarde &amp; restauration</h4>
+    <div style="font-size:.8rem;color:#666;margin-bottom:1rem">Exportez vos données avant toute mise à jour du site. En cas de problème, importez le fichier pour tout restaurer.</div>
+    <div class="setting-row">
+      <div><div class="setting-label">Exporter les données</div><div class="setting-desc">Télécharge un fichier JSON de sauvegarde</div></div>
+      <div class="setting-control"><button class="btn-primary" style="font-size:.85rem;padding:.4rem 1rem" onclick="exportData()">⬇ Exporter</button></div>
+    </div>
+    <div class="setting-row">
+      <div><div class="setting-label">Importer une sauvegarde</div><div class="setting-desc">Restaurer depuis un fichier JSON exporté</div></div>
+      <div class="setting-control">
+        <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(this)">
+        <button class="btn-secondary" style="font-size:.85rem;padding:.4rem 1rem" onclick="document.getElementById('import-file').click()">⬆ Importer</button>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div><div class="setting-label">Sauvegarde automatique</div><div class="setting-desc">Sauvegarde toutes les 2 minutes automatiquement</div></div>
+      <div class="setting-control">
+        <span id="autosave-status" style="font-size:.8rem;color:#666">—</span>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div><div class="setting-label">Stockage actif</div><div class="setting-desc">Où sont enregistrées vos données</div></div>
+      <div class="setting-control"><span id="storage-type" style="font-size:.85rem;color:#aaa">—</span></div>
+    </div>
   </div>
 </div>
 
@@ -953,12 +981,85 @@ function applyEdits(){
   togglePanel('edit-panel');renderAll();saveData();
 }
 
+// ─── EXPORT / IMPORT ───
+async function exportData(){
+  try{
+    const r=await fetch('/api/export');
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=`planning_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();URL.revokeObjectURL(url);
+    showToast('✓ Sauvegarde exportée','ok');
+  }catch(e){showToast('Erreur export','err');}
+}
+
+async function importData(input){
+  const file=input.files[0];if(!file)return;
+  try{
+    const text=await file.text();
+    const data=JSON.parse(text);
+    const r=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    const j=await r.json();
+    if(j.ok){await fetchData();renderAll();showToast('✓ Données restaurées','ok');}
+    else showToast(j.error||'Erreur import','err');
+  }catch(e){showToast('Fichier invalide','err');}
+  input.value='';
+}
+
+// ─── STOCKAGE BADGE ───
+async function checkStorage(){
+  try{
+    const r=await fetch('/api/health');
+    const j=await r.json();
+    const badge=document.getElementById('storage-badge');
+    const type=document.getElementById('storage-type');
+    if(j.storage==='postgresql'){
+      badge.style.background='#1a3a1a';badge.style.color='#4CAF50';badge.textContent='🗄 PostgreSQL';
+      if(type)type.innerHTML='<span style="color:#4CAF50;font-weight:600">PostgreSQL</span> — données persistantes garanties';
+    }else{
+      badge.style.background='#2a2a1a';badge.style.color='#FF9800';badge.textContent='📁 Fichier local';
+      if(type)type.innerHTML='<span style="color:#FF9800;font-weight:600">Fichier local</span> — peut se perdre au redémarrage';
+    }
+  }catch(e){}
+}
+
+// ─── AUTOSAVE ───
+let lastSaveHash='';
+let autosaveTimer=null;
+function dataHash(){return JSON.stringify(appData).length+'';}
+function startAutosave(){
+  if(autosaveTimer)clearInterval(autosaveTimer);
+  autosaveTimer=setInterval(async()=>{
+    if(!appData)return;
+    const h=dataHash();
+    if(h===lastSaveHash)return;
+    lastSaveHash=h;
+    try{
+      await fetch('/api/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(appData)});
+      const el=document.getElementById('autosave-status');
+      if(el)el.textContent='Dernière sauvegarde : '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      console.log('[autosave] OK');
+    }catch(e){console.warn('[autosave] erreur',e);}
+  },120000); // toutes les 2 minutes
+}
+
 // ─── INIT ───
 (async()=>{
   await fetchData();
+  lastSaveHash=dataHash();
   renderAll();
+  checkStorage();
+  startAutosave();
   window.addEventListener('resize',()=>renderTimeline(getShifts(weekOffset)));
+  // Refresh données des collègues toutes les 30s
   setInterval(async()=>{await fetchData();renderAll();},30000);
+  // Avant de quitter la page, sauvegarder si modifs en attente
+  window.addEventListener('beforeunload',async(e)=>{
+    if(appData&&dataHash()!==lastSaveHash){
+      navigator.sendBeacon('/api/data',JSON.stringify(appData));
+    }
+  });
 })();
 </script>
 </body>
